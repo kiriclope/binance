@@ -1,0 +1,253 @@
+#!/usr/bin/env python3
+
+import math
+import numpy 
+import click
+from client import * 
+from binance.exceptions import BinanceAPIException, BinanceOrderException
+
+client = get_client()
+@click.group() 
+def cli():
+    pass
+
+@cli.command()
+def account_balance(): 
+    balance = client.futures_account_balance()
+    for i in range( len(balance) ):
+        if  float(balance[i]['balance'])!=0.0:
+            print( balance[i]['asset'], 'balance', balance[i]['balance'], 'available', balance[i]['withdrawAvailable'] ) 
+
+@cli.command()
+def account_info():
+    account = client.futures_account()
+    print( 'total balance', account['totalWalletBalance'] +',',
+           'unrealized PNL', account['totalUnrealizedProfit']+',',
+           'total Margin balance', account['totalMarginBalance']+',',
+           'avl balance', account['availableBalance']+',',
+           'max withdraw', account['maxWithdrawAmount'] )
+    
+    # assets = account['assets']
+    # for i in range(len(assets)):
+    #     if float(assets[i]['unrealizedProfit'])>0:
+    #         print(assets[i]['asset'] + ',',
+    #               'unrealized PNL:', assets[i]['unrealizedProfit'] + ',',
+    #               'margin balance', assets[i]['marginBalance'] )
+    
+    positions = account['positions']
+    for i in range(len(positions)):
+        if float(positions[i]['entryPrice'])>0 :
+            print(positions[i]['symbol'], positions[i]['leverage'] + 'x,', positions[i]['positionSide'] + ',',
+                  'entry price:', positions[i]['entryPrice'] + ',',
+                  'unrealized PNL:', positions[i]['unrealizedProfit'] + ',',
+                  'maint margin:', positions[i]['maintMargin'] )
+        
+    
+@cli.command()
+@click.argument('dualSidePosition') 
+@click.argument('symbol') 
+def account_transfer():
+    client.futures_account_transfer(dualSidePosition=dualSidePosition, symbol=symbol)
+
+@cli.command()
+def change_leverage():
+    client.futures_change_leverage() 
+
+@cli.command()
+@click.argument('symbol') 
+def account_trades(symbol):
+    client.futures_account_trades(symbol=symbol) 
+
+@cli.command()
+def all_orders():
+    orders = client.futures_get_all_orders()
+    for i in range(len(orders)):
+        if orders[i]['status']=='NEW':
+            print(orders[i]['symbol'], orders[i]['positionSide'],
+                  orders[i]['type'], orders[i]['side'],
+                  'price', orders[i]['price'],
+                  'quantity', orders[i]['origQty']) 
+    
+@cli.command()
+@click.argument('symbol') 
+def open_order(symbol):
+    print('open orders')
+    orders = client.futures_get_open_orders(symbol=symbol)
+    for i in range(len(orders)):
+        print(orders[i]['symbol'], orders[i]['positionSide'], orders[i]['type'], orders[i]['side'], orders[i]['price'], orders[i]['origQty']) 
+
+    
+@cli.command()
+def cancel_all():
+    print('cancel_all_open_orders')
+    client.futures_cancel_all_open_orders() 
+
+@cli.command()
+@click.argument('side') 
+@click.argument('position') 
+@click.argument('order_type') 
+@click.argument('symbol') 
+@click.option('--test','-t', default=False, is_flag=True) 
+@click.option('--percentage', '-p', default=1, type=float) 
+@click.option('--mark_per', '-m', default=1.005, type=float) 
+@click.option('--stop_per', '-s', default=0.975 , type=float) 
+@click.option('--target_per', '-x', default=1.25, type=float) 
+@click.option('--target_qty_per', '-q', default=0.5, type=float) 
+
+def make_order(side, position, order_type, symbol, test, percentage, mark_per, stop_per, target_per, target_qty_per): 
+    
+    balance = client.futures_account_balance() 
+    print( balance[0]['asset'], 'balance', balance[0]['balance'], 'available', balance[0]['withdrawAvailable'] )     
+    base_balance = balance[0]['withdrawAvailable']
+    
+    account = client.futures_account()
+    positions = account['positions']
+    for i in range(len(positions)):
+        if positions[i]['symbol']==symbol and positions[i]['positionSide'] == position and positions[i]['positionAmt']:
+            print(positions[i]['symbol'], positions[i]['leverage'] + 'x,',
+                  positions[i]['positionSide'] + ',',
+                  'quantity:', positions[i]['positionAmt'] +',', 
+                  'entry price:', positions[i]['entryPrice'] + ',',
+                  'unrealized PNL:', positions[i]['unrealizedProfit'] + ',',
+                  'maint margin:', positions[i]['maintMargin'] )
+            
+            asset_quantity = positions[i]['positionAmt']
+            
+    mark_info = client.futures_mark_price(symbol=symbol) 
+    mark_price = float(mark_info['markPrice'])
+
+    position_info = client.futures_position_information(symbol=symbol)
+    if position =='LONG':
+        print('margin type:', position_info[0]['marginType']+',',
+              'leverage:', position_info[0]['leverage']+',',
+              'liquidationPrice', position_info[0]['liquidationPrice'])
+        leverage = float( position_info[0]['leverage'] )
+        
+    elif position=='SHORT':
+        print('margin type:', position_info[1]['marginType']+',',
+              'leverage:', position_info[1]['leverage']+',',
+              'liquidationPrice', position_info[1]['liquidationPrice'])
+        leverage = float( position_info[1]['leverage'] )
+        
+    else:
+        print('margin type:', position_info['marginType']+',',
+              'leverage:', position_info['leverage']+',',
+              'liquidationPrice', position_info['liquidationPrice'])
+        leverage = float( position_info['leverage'] )
+            
+    print(symbol, 'mark price:', mark_info['markPrice']+',',
+          'last funding rate:', str(round(float(mark_info['lastFundingRate'])*100,4))+'%,',
+          'countdown', convert( float(mark_info['nextFundingTime'] ) ) )
+    
+    exchange_info = client.futures_exchange_info()["symbols"] 
+    sym_info = list(filter(lambda dum: dum['symbol'] == symbol, exchange_info))[0] 
+    filters = sym_info['filters'] 
+    
+    tick_size = float( list(filter(lambda dum: dum['filterType'] == 'PRICE_FILTER', filters))[0]['tickSize'] )
+    step_size = float( list(filter(lambda dum: dum['filterType'] == 'LOT_SIZE', filters))[0]['stepSize'] )
+    
+    # price
+    price = float( float(mark_price) *  mark_per ) 
+    price = float( float_precision(price, tick_size) ) 
+    
+    # quantity 
+    if side=='BUY': 
+        quantity = float(base_balance) * float(percentage)/float(price)*0.9995 * leverage 
+    else: 
+        quantity = float(asset_quantity) * float(percentage) * 0.9995 
+        
+    quantity = float( float_precision(quantity, step_size) ) 
+    
+    # stops and targets 
+    stopPrice = float(float_precision(price*stop_per, tick_size)) 
+    targetPrice = float(float_precision(price*target_per, tick_size)) 
+    targetQty =  float(float_precision(quantity*target_qty_per, step_size)) 
+    
+    # orders 
+    try:
+        if test: 
+            print('test order:', side, position, order_type, 'symbol', symbol,
+                  'entry price', price, 'quantity', quantity, 'cost', price*quantity/leverage)            
+            print('SELL', position, 'STOP_MARKET', symbol, 'stopPrice', stopPrice, 'loss', stopPrice*quantity/leverage)             
+            print('SELL', position, 'TAKE_PROFIT', symbol, 'target price',
+                  targetPrice, 'quantity', targetQty, 'profit', targetPrice*targetQty/leverage) 
+            
+        else: 
+            if order_type=='TPSL':
+                print(side, position, 'LIMIT', symbol, 'price', price, 'quantity', quantity, 'cost', price*quantity/leverage) 
+                
+                order = client.futures_create_order(symbol=symbol,side=side, positionSide=position,
+                                                    type='LIMIT', timeInForce='GTC', priceProtect=True,
+                                                     price=price, quantity=quantity) 
+                
+                orderId = order['orderId']
+                status = order['status']
+                
+                while status!='FILLED':
+                    status = client.futures_get_order(symbol=symbol, orderId=orderId)['status'] 
+                    print(status)
+                    
+                if status=='FILLED': 
+                    print('Order filled')
+                    
+                    if side=='BUY':
+                        
+                        print('SELL', position, 'STOP_MARKET', symbol, 'stopPrice', stopPrice) 
+                        
+                        client.futures_create_order(symbol=symbol, side='SELL', positionSide=position,
+                                                    type='STOP_MARKET', stopPrice=stopPrice,
+                                                    priceProtect='True', workingType='MARK_PRICE', closePosition='TRUE') 
+                        
+                        print('SELL', position, 'TAKE_PROFIT', symbol, 'target price', targetPrice, 'quantity', targetQty) 
+                                                
+                        client.futures_create_order(symbol=symbol,side='SELL', positionSide=position,
+                                                    type='LIMIT', timeInForce='GTC', price=targetPrice, quantity=targetQty) 
+                        
+                    else:
+                        client.futures_create_order(symbol=symbol, side='SELL', positionSide=position,
+                                                    type='LIMIT', timeInForce='GTC',
+                                                    quantity=quantity, price=price*0.95, priceProtect=True) 
+                        
+                        client.futures_create_order(symbol=symbol, side='SELL', positionSide=position,
+                                                    type='STOP', timeInForce='GTC', 
+                                                    stopPrice=round(price*1.05,2), workingType='MARK_PRICE',
+                                                    quantity=quantity, price=round(price*1.0495,2), priceProtect=True) 
+                    
+            elif 'STOP_MARKET' in order_type : 
+                print('SELL', position, 'STOP_MARKET', symbol, 'stopPrice', stopPrice) 
+                
+                client.futures_create_order(symbol=symbol, side='SELL', positionSide=position,
+                                            type='STOP_MARKET', stopPrice=stopPrice,
+                                            priceProtect='True', workingType='MARK_PRICE', closePosition='TRUE')
+                
+            elif 'TP' in order_type:                
+                print(side, position, 'TAKE_PROFIT', symbol, 'target price', targetPrice, 'quantity', targetQty) 
+                                                
+                client.futures_create_order(symbol=symbol,side='SELL', positionSide=position,
+                                            type='LIMIT', timeInForce='GTC', price=targetPrice, quantity=targetQty) 
+                
+            else:
+                print('live order:', side, position, order_type, 'symbol', symbol,
+                      'price', price, 'quantity', quantity, 'cost', price*quantity/leverage)
+                
+                order = client.futures_create_order(symbol=symbol,side=side, positionSide=position, 
+                                                    type=order_type, timeInForce='GTC', 
+                                                    quantity=quantity, price=price, priceProtect=True) 
+                
+                orderId = order['orderId']
+                status = order['status']
+                
+                while status!='FILLED': 
+                    status = client.futures_get_order(symbol=symbol, orderId=orderId)['status'] 
+                   
+                if status=='FILLED':
+                    print('Order filled') 
+                
+    except BinanceAPIException as error: 
+        print(error) 
+        
+    except BinanceOrderException as error: 
+        print(error) 
+
+if __name__ == '__main__': 
+    cli() 
