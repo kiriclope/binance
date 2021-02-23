@@ -92,7 +92,7 @@ def cancel_all():
 @click.option('--percentage', '-p', default=1, type=float) 
 @click.option('--mark_per', '-m', default=1.005, type=float) 
 @click.option('--stop_per', '-s', default=0.975 , type=float) 
-@click.option('--target_per', '-x', default=1.25, type=float) 
+@click.option('--target_per', '-x', default=1.025, type=float) 
 @click.option('--target_qty_per', '-q', default=0.5, type=float) 
 
 def make_order(side, position, order_type, symbol, test, percentage, mark_per, stop_per, target_per, target_qty_per): 
@@ -151,31 +151,84 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
     price = float( float(mark_price) *  mark_per ) 
     price = float( float_precision(price, tick_size) ) 
     
-    # quantity 
     if side=='BUY': 
-        quantity = float(base_balance) * float(percentage)/float(price)*0.9995 * leverage 
+        # quantity 
+        quantity = float(base_balance) * float(percentage)/float(price)*0.9995 * leverage        
     else: 
-        quantity = float(asset_quantity) * float(percentage) * 0.9995 
+        quantity = float(asset_quantity) * float(percentage) * 0.9995
+
+    if position=='SHORT':
+        stop_per = 1 + 0.025 
+        target_per = 1 - 0.25 
         
-    quantity = float( float_precision(quantity, step_size) ) 
-    
     # stops and targets 
     stopPrice = float(float_precision(price*stop_per, tick_size)) 
     targetPrice = float(float_precision(price*target_per, tick_size)) 
     targetQty =  float(float_precision(quantity*target_qty_per, step_size)) 
     
+    quantity = float( float_precision(quantity, step_size) ) 
+    
+    
+    cost = float_precision(price*quantity/leverage, tick_size) 
+    loss = float_precision( (price-stopPrice)*quantity, tick_size) 
+    profit = float_precision( (targetPrice-price)*targetQty, tick_size) 
     # orders 
     try:
-        if test: 
-            print('test order:', side, position, order_type, symbol, 
-                  'entry price', price, 'quantity', quantity, 'cost', price*quantity/leverage)    
-            print('SELL', position, 'STOP_MARKET', symbol, 'stopPrice', stopPrice, 'loss', (price-stopPrice)*quantity) 
-            print('SELL', position, 'TAKE_PROFIT', symbol,
-                  'target price', targetPrice, 'quantity', targetQty, 'profit', (targetPrice-price)*targetQty) 
+        if test:
+            print('################################################') 
+            print('TEST ORDER:', side, position, order_type, symbol) 
+            print('################################################') 
             
-        else: 
-            if order_type=='TPSL':
-                print(side, position, 'LIMIT', symbol, 'price', price, 'quantity', quantity, 'cost', price*quantity/leverage) 
+            if order_type=='LIMIT':
+                print('LIMIT', 'price', price, 'quantity', quantity, 'cost', cost)
+                
+            elif order_type=='MARKET':
+                print('MARKET', 'price', price, 'quantity', quantity, 'cost', cost) 
+                
+            elif 'STOP_MARKET' in order_type : 
+                print('STOP_MARKET', 'price', stopPrice, 'loss', loss)
+                
+            elif 'TAKE_PROFIT' in order_type: 
+                print('TAKE_PROFIT', 'price', targetPrice, 'quantity', targetQty, 'profit', profit)
+                
+            elif order_type=='TPSL' and side=='BUY':
+                print('LIMIT', 'price', price, 'quantity', quantity, 'cost', cost)
+                print('STOP_MARKET', 'price', stopPrice, 'loss', loss)                
+                print('TAKE_PROFIT', 'price', targetPrice, 'quantity', targetQty, 'profit', profit) 
+                
+        else:
+            
+            print('################################################') 
+            print('LIVE ORDER:', side, position, order_type, symbol) 
+            print('################################################')             
+            
+            if order_type=='LIMIT':
+                print('LIMIT', 'price', price, 'quantity', quantity, 'cost', cost)
+                
+                client.futures_create_order(symbol=symbol,side=side, positionSide=position,
+                                            type='LIMIT', timeInForce='GTC', priceProtect=True,
+                                            price=price, quantity=quantity)
+            elif order_type=='MARKET':
+                print('MARKET', 'price', price, 'quantity', quantity, 'cost', cost) 
+                
+                client.futures_create_order(symbol=symbol, side=side, positionSide=position,
+                                            type='MARKET', quantity=quantity) 
+            
+            elif 'STOP_MARKET' in order_type : 
+                print('STOP_MARKET', 'price', stopPrice, 'loss', loss)
+                
+                client.futures_create_order(symbol=symbol, side='SELL', positionSide=position,
+                                            type='STOP_MARKET', stopPrice=stopPrice,
+                                            priceProtect='True', workingType='MARK_PRICE', closePosition='TRUE')
+                
+            elif 'TAKE_PROFIT' in order_type: 
+                print('TAKE_PROFIT', 'price', targetPrice, 'quantity', targetQty, 'profit', profit)
+                
+                client.futures_create_order(symbol=symbol,side='SELL', positionSide=position,
+                                            type='LIMIT', timeInForce='GTC', price=targetPrice, quantity=targetQty) 
+                
+            elif order_type=='TPSL' and side=='BUY': 
+                print('LIMIT', 'price', price, 'quantity', quantity, 'cost', cost) 
                 
                 order = client.futures_create_order(symbol=symbol,side=side, positionSide=position,
                                                     type='LIMIT', timeInForce='GTC', priceProtect=True,
@@ -189,62 +242,20 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
                     print(status)
                     
                 if status=='FILLED': 
-                    print('Order filled')
-                    
-                    if side=='BUY':
-                        
-                        print('SELL', position, 'STOP_MARKET', symbol, 'stopPrice', stopPrice, 'loss', (price-stopPrice)*quantity) 
-                        
-                        client.futures_create_order(symbol=symbol, side='SELL', positionSide=position,
-                                                    type='STOP_MARKET', stopPrice=stopPrice,
-                                                    priceProtect='True', workingType='MARK_PRICE', closePosition='TRUE') 
-                        
-                        print('SELL', position, 'TAKE_PROFIT', symbol,
-                              'target price', targetPrice, 'quantity', targetQty, 'profit', (targetPrice-price)*targetQty) 
-                                                
-                        client.futures_create_order(symbol=symbol,side='SELL', positionSide=position,
-                                                    type='LIMIT', timeInForce='GTC', price=targetPrice, quantity=targetQty) 
-                        
-                    else:
-                        client.futures_create_order(symbol=symbol, side='SELL', positionSide=position,
-                                                    type='LIMIT', timeInForce='GTC',
-                                                    quantity=quantity, price=price*0.95, priceProtect=True) 
-                        
-                        client.futures_create_order(symbol=symbol, side='SELL', positionSide=position,
-                                                    type='STOP', timeInForce='GTC', 
-                                                    stopPrice=round(price*1.05,2), workingType='MARK_PRICE',
-                                                    quantity=quantity, price=round(price*1.0495,2), priceProtect=True) 
-                    
-            elif 'STOP_MARKET' in order_type : 
-                print('SELL', position, 'STOP_MARKET', symbol, 'stopPrice', stopPrice) 
-                
-                client.futures_create_order(symbol=symbol, side='SELL', positionSide=position,
-                                            type='STOP_MARKET', stopPrice=stopPrice,
-                                            priceProtect='True', workingType='MARK_PRICE', closePosition='TRUE')
-                
-            elif 'TP' in order_type:                
-                print(side, position, 'TAKE_PROFIT', symbol, 'target price', targetPrice, 'quantity', targetQty) 
-                                                
-                client.futures_create_order(symbol=symbol,side='SELL', positionSide=position,
-                                            type='LIMIT', timeInForce='GTC', price=targetPrice, quantity=targetQty) 
-                
-            else:
-                print('live order:', side, position, order_type, 'symbol', symbol,
-                      'price', price, 'quantity', quantity, 'cost', price*quantity/leverage)
-                
-                order = client.futures_create_order(symbol=symbol,side=side, positionSide=position, 
-                                                    type=order_type, timeInForce='GTC', 
-                                                    quantity=quantity, price=price, priceProtect=True) 
-                
-                orderId = order['orderId']
-                status = order['status']
-                
-                while status!='FILLED': 
-                    status = client.futures_get_order(symbol=symbol, orderId=orderId)['status'] 
-                   
-                if status=='FILLED':
                     print('Order filled') 
-                
+                    
+                    print('STOP_MARKET', 'price', stopPrice, 'loss', loss)
+                    
+                    client.futures_create_order(symbol=symbol, side='SELL', positionSide=position,
+                                                type='STOP_MARKET', stopPrice=stopPrice,
+                                                priceProtect='True', workingType='MARK_PRICE', closePosition='TRUE') 
+                        
+                    print('TAKE_PROFIT', 'price', targetPrice, 'quantity', targetQty, 'profit', profit) 
+                    
+                    client.futures_create_order(symbol=symbol,side='SELL', positionSide=position,
+                                                type='LIMIT', timeInForce='GTC', price=targetPrice, quantity=targetQty) 
+                        
+                        
     except BinanceAPIException as error: 
         print(error) 
         
