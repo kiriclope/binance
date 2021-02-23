@@ -3,7 +3,8 @@
 import math
 import numpy 
 import click
-from client import * 
+from client import *
+
 from binance.exceptions import BinanceAPIException, BinanceOrderException
 
 client = get_client()
@@ -166,11 +167,11 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
     # orders 
     try:
         if test: 
-            print('test order:', side, position, order_type, 'symbol', symbol,
-                  'entry price', price, 'quantity', quantity, 'cost', price*quantity/leverage)            
-            print('SELL', position, 'STOP_MARKET', symbol, 'stopPrice', stopPrice, 'loss', stopPrice*quantity/leverage)             
-            print('SELL', position, 'TAKE_PROFIT', symbol, 'target price',
-                  targetPrice, 'quantity', targetQty, 'profit', targetPrice*targetQty/leverage) 
+            print('test order:', side, position, order_type, symbol, 
+                  'entry price', price, 'quantity', quantity, 'cost', price*quantity/leverage)    
+            print('SELL', position, 'STOP_MARKET', symbol, 'stopPrice', stopPrice, 'loss', (price-stopPrice)*quantity) 
+            print('SELL', position, 'TAKE_PROFIT', symbol,
+                  'target price', targetPrice, 'quantity', targetQty, 'profit', (targetPrice-price)*targetQty) 
             
         else: 
             if order_type=='TPSL':
@@ -192,13 +193,14 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
                     
                     if side=='BUY':
                         
-                        print('SELL', position, 'STOP_MARKET', symbol, 'stopPrice', stopPrice) 
+                        print('SELL', position, 'STOP_MARKET', symbol, 'stopPrice', stopPrice, 'loss', (price-stopPrice)*quantity) 
                         
                         client.futures_create_order(symbol=symbol, side='SELL', positionSide=position,
                                                     type='STOP_MARKET', stopPrice=stopPrice,
                                                     priceProtect='True', workingType='MARK_PRICE', closePosition='TRUE') 
                         
-                        print('SELL', position, 'TAKE_PROFIT', symbol, 'target price', targetPrice, 'quantity', targetQty) 
+                        print('SELL', position, 'TAKE_PROFIT', symbol,
+                              'target price', targetPrice, 'quantity', targetQty, 'profit', (targetPrice-price)*targetQty) 
                                                 
                         client.futures_create_order(symbol=symbol,side='SELL', positionSide=position,
                                                     type='LIMIT', timeInForce='GTC', price=targetPrice, quantity=targetQty) 
