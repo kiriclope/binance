@@ -91,8 +91,8 @@ def cancel_all():
 @click.option('--test','-t', default=False, is_flag=True) 
 @click.option('--percentage', '-p', default=1, type=float) 
 @click.option('--mark_per', '-m', default=1.005, type=float) 
-@click.option('--stop_per', '-s', default=0.975 , type=float) 
-@click.option('--target_per', '-x', default=1.025, type=float) 
+@click.option('--stop_per', '-s', default=0.96 , type=float) 
+@click.option('--target_per', '-x', default=1.1, type=float) 
 @click.option('--target_qty_per', '-q', default=0.5, type=float) 
 
 def make_order(side, position, order_type, symbol, test, percentage, mark_per, stop_per, target_per, target_qty_per): 
@@ -150,14 +150,17 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
     # price
     price = float( float(mark_price) *  mark_per ) 
     price = float( float_precision(price, tick_size) ) 
+
     
-    if side=='BUY': 
+    if side=='OPEN': 
         # quantity 
-        quantity = float(base_balance) * float(percentage)/float(price)*0.9995 * leverage        
+        quantity = float(base_balance) * float(percentage)/float(price)*0.9995 * leverage
+            
     else: 
         quantity = float(asset_quantity) * float(percentage) * 0.9995
-
-    if position=='SHORT':
+        
+        
+    if position=='SHORT': 
         stop_per = 1 + 0.025 
         target_per = 1 - 0.25 
         
@@ -166,8 +169,7 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
     targetPrice = float(float_precision(price*target_per, tick_size)) 
     targetQty =  float(float_precision(quantity*target_qty_per, step_size)) 
     
-    quantity = float( float_precision(quantity, step_size) ) 
-    
+    quantity = float( float_precision(quantity, step_size) )     
     
     cost = float_precision(price*quantity/leverage, tick_size) 
     loss = float_precision( (price-stopPrice)*quantity, tick_size) 
@@ -176,7 +178,7 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
     try:
         if test:
             print('################################################') 
-            print('TEST ORDER:', side, position, order_type, symbol) 
+            print('TEST ORDER:', side, position, order_type, symbol, '%dx' % int(leverage) ) 
             print('################################################') 
             
             if order_type=='LIMIT':
@@ -191,7 +193,7 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
             elif 'TAKE_PROFIT' in order_type: 
                 print('TAKE_PROFIT', 'price', targetPrice, 'quantity', targetQty, 'profit', profit)
                 
-            elif order_type=='TPSL' and side=='BUY':
+            elif order_type=='TPSL':
                 print('LIMIT', 'price', price, 'quantity', quantity, 'cost', cost)
                 print('STOP_MARKET', 'price', stopPrice, 'loss', loss)                
                 print('TAKE_PROFIT', 'price', targetPrice, 'quantity', targetQty, 'profit', profit) 
@@ -200,7 +202,9 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
             
             print('################################################') 
             print('LIVE ORDER:', side, position, order_type, symbol) 
-            print('################################################')             
+            print('################################################')
+            
+            side = openCloseToBuySell(side, position) 
             
             if order_type=='LIMIT':
                 print('LIMIT', 'price', price, 'quantity', quantity, 'cost', cost)
@@ -213,23 +217,27 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
                 
                 client.futures_create_order(symbol=symbol, side=side, positionSide=position,
                                             type='MARKET', quantity=quantity) 
-            
-            elif 'STOP_MARKET' in order_type : 
-                print('STOP_MARKET', 'price', stopPrice, 'loss', loss)
                 
-                client.futures_create_order(symbol=symbol, side='SELL', positionSide=position,
+            elif 'STOP_MARKET' in order_type : 
+                side = openCloseToBuySell('CLOSE', position)
+                
+                print('STOP_MARKET', 'price', stopPrice, 'loss', loss)
+                                                
+                client.futures_create_order(symbol=symbol, side=side, positionSide=position,
                                             type='STOP_MARKET', stopPrice=stopPrice,
                                             priceProtect='True', workingType='MARK_PRICE', closePosition='TRUE')
                 
             elif 'TAKE_PROFIT' in order_type: 
-                print('TAKE_PROFIT', 'price', targetPrice, 'quantity', targetQty, 'profit', profit)
+                side = openCloseToBuySell('CLOSE', position)
+                
+                print('TAKE_PROFIT', 'price', targetPrice, 'quantity', targetQty, 'profit', profit)                
                 
                 client.futures_create_order(symbol=symbol,side='SELL', positionSide=position,
                                             type='LIMIT', timeInForce='GTC', price=targetPrice, quantity=targetQty) 
                 
-            elif order_type=='TPSL' and side=='BUY': 
-                print('LIMIT', 'price', price, 'quantity', quantity, 'cost', cost) 
-                
+            elif order_type=='TPSL': 
+                print('LIMIT', 'price', price, 'quantity', quantity, 'cost', cost)
+                                
                 order = client.futures_create_order(symbol=symbol,side=side, positionSide=position,
                                                     type='LIMIT', timeInForce='GTC', priceProtect=True,
                                                      price=price, quantity=quantity) 
@@ -239,10 +247,11 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
                 
                 while status!='FILLED':
                     status = client.futures_get_order(symbol=symbol, orderId=orderId)['status'] 
-                    print(status)
                     
                 if status=='FILLED': 
-                    print('Order filled') 
+                    print('Order filled')
+                    
+                    side = openCloseToBuySell('CLOSE', position) 
                     
                     print('STOP_MARKET', 'price', stopPrice, 'loss', loss)
                     

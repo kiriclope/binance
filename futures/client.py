@@ -40,3 +40,17 @@ def convert(seconds):
     seconds %= 60
       
     return "%d:%02d:%02d" % (hour, minutes, seconds)
+
+def openCloseToBuySell(side, position):
+    if side=='OPEN':
+        if position=='LONG':
+            side='BUY'
+        else:
+            side='SELL'
+    else:
+        if position=='LONG':
+            side='SELL'
+        else:
+            side='BUY'
+
+    return side 
