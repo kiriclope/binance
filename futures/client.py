@@ -52,5 +52,5 @@ def openCloseToBuySell(side, position):
             side='SELL'
         else:
             side='BUY'
-
+            
     return side 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import math
+import time 
 import numpy 
 import click
 from client import *
@@ -21,28 +22,21 @@ def account_balance():
 
 @cli.command()
 def account_info():
+    balance = client.futures_account_balance() 
+    print( balance[0]['asset'], 'balance', balance[0]['balance'], 'available', balance[0]['withdrawAvailable'] )     
+    base_balance = balance[0]['withdrawAvailable']
+    
     account = client.futures_account()
-    print( 'total balance', account['totalWalletBalance'] +',',
-           'unrealized PNL', account['totalUnrealizedProfit']+',',
-           'total Margin balance', account['totalMarginBalance']+',',
-           'avl balance', account['availableBalance']+',',
-           'max withdraw', account['maxWithdrawAmount'] )
-    
-    # assets = account['assets']
-    # for i in range(len(assets)):
-    #     if float(assets[i]['unrealizedProfit'])>0:
-    #         print(assets[i]['asset'] + ',',
-    #               'unrealized PNL:', assets[i]['unrealizedProfit'] + ',',
-    #               'margin balance', assets[i]['marginBalance'] )
-    
     positions = account['positions']
     for i in range(len(positions)):
         if float(positions[i]['entryPrice'])>0 :
-            print(positions[i]['symbol'], positions[i]['leverage'] + 'x,', positions[i]['positionSide'] + ',',
+            print(positions[i]['symbol'], positions[i]['leverage'] + 'x,',
+                  positions[i]['positionSide'] + ',',
+                  'quantity:', positions[i]['positionAmt'] +',', 
                   'entry price:', positions[i]['entryPrice'] + ',',
                   'unrealized PNL:', positions[i]['unrealizedProfit'] + ',',
                   'maint margin:', positions[i]['maintMargin'] )
-        
+            
     
 @cli.command()
 @click.argument('dualSidePosition') 
@@ -90,13 +84,13 @@ def cancel_all():
 @click.argument('symbol') 
 @click.option('--test','-t', default=False, is_flag=True) 
 @click.option('--percentage', '-p', default=1, type=float) 
-@click.option('--mark_per', '-m', default=1.005, type=float) 
-@click.option('--stop_per', '-s', default=0.96 , type=float) 
-@click.option('--target_per', '-x', default=1.1, type=float) 
+@click.option('--mark_per', '-m', default=0.001, type=float) 
+@click.option('--stop_per', '-s', default=0.01, type=float) 
+@click.option('--target_per', '-x', default=0.05, type=float) 
 @click.option('--target_qty_per', '-q', default=0.5, type=float) 
+@click.option('--leverage', '-l', type=int) 
 
-def make_order(side, position, order_type, symbol, test, percentage, mark_per, stop_per, target_per, target_qty_per): 
-    
+def make_order(side, position, order_type, symbol, leverage, test, percentage, mark_per, stop_per, target_per, target_qty_per):     
     balance = client.futures_account_balance() 
     print( balance[0]['asset'], 'balance', balance[0]['balance'], 'available', balance[0]['withdrawAvailable'] )     
     base_balance = balance[0]['withdrawAvailable']
@@ -116,7 +110,7 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
             
     mark_info = client.futures_mark_price(symbol=symbol) 
     mark_price = float(mark_info['markPrice'])
-
+    
     position_info = client.futures_position_information(symbol=symbol)
     if position =='LONG':
         print('margin type:', position_info[0]['marginType']+',',
@@ -148,32 +142,35 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
     step_size = float( list(filter(lambda dum: dum['filterType'] == 'LOT_SIZE', filters))[0]['stepSize'] )
     
     # price
-    price = float( float(mark_price) *  mark_per ) 
+    if position=='LONG':
+        price = float( float(mark_price) *  (1 - mark_per ) ) 
+    else: 
+        price = float( float(mark_price) *  (1 + mark_per ) ) 
+        
     price = float( float_precision(price, tick_size) ) 
-
-    
+        
+    # quantity 
     if side=='OPEN': 
-        # quantity 
         quantity = float(base_balance) * float(percentage)/float(price)*0.9995 * leverage
             
     else: 
         quantity = float(asset_quantity) * float(percentage) * 0.9995
         
-        
+    quantity = float( float_precision(quantity, step_size) ) 
+    
     if position=='SHORT': 
-        stop_per = 1 + 0.025 
-        target_per = 1 - 0.25 
+        stop_per = - stop_per 
+        target_per = - target_per 
         
     # stops and targets 
-    stopPrice = float(float_precision(price*stop_per, tick_size)) 
-    targetPrice = float(float_precision(price*target_per, tick_size)) 
+    stopPrice = float(float_precision(price*(1-stop_per), tick_size)) 
+    targetPrice = float(float_precision(price*(1+target_per), tick_size))
     targetQty =  float(float_precision(quantity*target_qty_per, step_size)) 
-    
-    quantity = float( float_precision(quantity, step_size) )     
     
     cost = float_precision(price*quantity/leverage, tick_size) 
     loss = float_precision( (price-stopPrice)*quantity, tick_size) 
-    profit = float_precision( (targetPrice-price)*targetQty, tick_size) 
+    profit = float_precision( (targetPrice-price)*targetQty, tick_size)
+    
     # orders 
     try:
         if test:
@@ -196,8 +193,55 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
             elif order_type=='TPSL':
                 print('LIMIT', 'price', price, 'quantity', quantity, 'cost', cost)
                 print('STOP_MARKET', 'price', stopPrice, 'loss', loss)                
-                print('TAKE_PROFIT', 'price', targetPrice, 'quantity', targetQty, 'profit', profit) 
+                print('TAKE_PROFIT', 'price', targetPrice, 'quantity', targetQty, 'profit', profit)
                 
+            elif order_type=='PUMP':
+                
+                entryPrice = float(client.futures_mark_price(symbol=symbol)['markPrice'])
+                currentPrice = entryPrice 
+                stopPrice = float(float_precision(currentPrice*(1-stop_per), tick_size)) 
+                targetPrice = float(float_precision(currentPrice*(1+target_per), tick_size))
+                
+                print('MARKET', 'price', currentPrice, 'quantity', quantity, 'cost', cost) 
+                
+                if position=='LONG':
+                    while currentPrice<targetPrice and currentPrice>stopPrice: 
+                        currentPrice = float(client.futures_mark_price(symbol=symbol)['markPrice'])
+                        
+                        print('stop', stopPrice, 'price', currentPrice, 'target', targetPrice,
+                              'PNL', round( currentPrice-float(entryPrice), 2),
+                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)', end='\r')                         
+                    
+                        if currentPrice>=targetPrice: 
+                            stopPrice = float(float_precision(currentPrice*(1-stop_per), tick_size)) 
+                            targetPrice = float(float_precision(currentPrice*(1+target_per), tick_size))
+                            
+                    print('') 
+                    if currentPrice>=targetPrice : 
+                        print('TAKE_PROFIT, PNL', round( currentPrice-float(entryPrice), 2) ,
+                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)' ) 
+                    else:
+                        print('STOP_MARKET, PNL', round( currentPrice-float(entryPrice), 2) ,
+                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)' ) 
+                else:
+                    while currentPrice>targetPrice and currentPrice<stopPrice: 
+                        currentPrice = float(client.futures_mark_price(symbol=symbol)['markPrice'])
+                        
+                        print('stop', stopPrice, 'price', currentPrice, 'target', targetPrice,
+                              'PNL', round( currentPrice-float(entryPrice), 2),
+                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)', end='\r')                         
+                    
+                        if currentPrice<=targetPrice: 
+                            stopPrice = float(float_precision(currentPrice*(1-stop_per), tick_size)) 
+                            targetPrice = float(float_precision(currentPrice*(1+target_per), tick_size))
+                            
+                    print('') 
+                    if currentPrice>=targetPrice : 
+                        print('TAKE_PROFIT, PNL', round( currentPrice-float(entryPrice), 2) ,
+                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)' ) 
+                    else:
+                        print('STOP_MARKET, PNL', round( currentPrice-float(entryPrice), 2) ,
+                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)' )                 
         else:
             
             print('################################################') 
@@ -225,7 +269,7 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
                                                 
                 client.futures_create_order(symbol=symbol, side=side, positionSide=position,
                                             type='STOP_MARKET', stopPrice=stopPrice,
-                                            priceProtect='True', workingType='MARK_PRICE', closePosition='TRUE')
+                                            priceProtect='True', workingType='MARK_PRICE', closePosition='TRUE') 
                 
             elif 'TAKE_PROFIT' in order_type: 
                 side = openCloseToBuySell('CLOSE', position)
@@ -255,16 +299,75 @@ def make_order(side, position, order_type, symbol, test, percentage, mark_per, s
                     
                     print('STOP_MARKET', 'price', stopPrice, 'loss', loss)
                     
-                    client.futures_create_order(symbol=symbol, side='SELL', positionSide=position,
+                    client.futures_create_order(symbol=symbol, side=side, positionSide=position,
                                                 type='STOP_MARKET', stopPrice=stopPrice,
                                                 priceProtect='True', workingType='MARK_PRICE', closePosition='TRUE') 
                         
                     print('TAKE_PROFIT', 'price', targetPrice, 'quantity', targetQty, 'profit', profit) 
                     
-                    client.futures_create_order(symbol=symbol,side='SELL', positionSide=position,
+                    client.futures_create_order(symbol=symbol,side=side, positionSide=position,
                                                 type='LIMIT', timeInForce='GTC', price=targetPrice, quantity=targetQty) 
                         
+            elif 'PUMP' in order_type:
+                
+                entryPrice = float(client.futures_mark_price(symbol=symbol)['markPrice'])
+                currentPrice = entryPrice
+                stopPrice = float(float_precision(currentPrice*(1-stop_per), tick_size)) 
+                targetPrice = float(float_precision(currentPrice*(1+target_per), tick_size))
+                
+                print('MARKET', 'price', currentPrice, 'quantity', quantity, 'cost', cost) 
+                
+                client.futures_create_order(symbol=symbol, side=side, positionSide=position,
+                                            type='MARKET', quantity=quantity)
+                
+                if position=='LONG':
+                    while currentPrice<targetPrice and currentPrice>stopPrice: 
+                        currentPrice = float(client.futures_mark_price(symbol=symbol)['markPrice'])
                         
+                        print('stop', stopPrice, 'price', currentPrice, 'target', targetPrice,
+                              'PNL', round( currentPrice-float(entryPrice), 2),
+                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)', end='\r')                         
+                        
+                        if currentPrice>=targetPrice: 
+                            stopPrice = float(float_precision(currentPrice*(1-stop_per), tick_size)) 
+                            targetPrice = float(float_precision(currentPrice*(1+target_per), tick_size)) 
+                        
+                    print('') 
+                    side = openCloseToBuySell('CLOSE', position) 
+                    
+                    client.futures_create_order(symbol=symbol, side=side, positionSide=position,
+                                                type='MARKET', quantity=quantity)  
+                    
+                    if currentPrice>=targetPrice : 
+                        print('TAKE_PROFIT price', currentPrice,'percentage', round( (currentPrice/float(entryPrice)-1)*100, 2) ) 
+                    else:
+                        print('STOP_MARKET price', currentPrice, 'percentage', round( (currentPrice/float(entryPrice)-1) *100, 2) ) 
+                        
+                else:
+                    while currentPrice>targetPrice and currentPrice<stopPrice: 
+                        currentPrice = float(client.futures_mark_price(symbol=symbol)['markPrice'])
+                        
+                        print('stop', stopPrice, 'price', currentPrice, 'target', targetPrice,
+                              'PNL', round( currentPrice-float(entryPrice), 2),
+                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)', end='\r')                         
+                    
+                        if currentPrice<=targetPrice: 
+                            stopPrice = float(float_precision(currentPrice*(1-stop_per), tick_size)) 
+                            targetPrice = float(float_precision(currentPrice*(1+target_per), tick_size)) 
+                        
+                    print('') 
+                    side = openCloseToBuySell('CLOSE', position) 
+                    
+                    client.futures_create_order(symbol=symbol, side=side, positionSide=position,
+                                                type='MARKET', quantity=quantity)                 
+                                        
+                    if currentPrice<=targetPrice : 
+                        print('TAKE_PROFIT, PNL', round( currentPrice-float(entryPrice), 2) ,
+                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)' ) 
+                    else:
+                        print('STOP_MARKET, PNL', round( currentPrice-float(entryPrice), 2) ,
+                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)' ) 
+                    
     except BinanceAPIException as error: 
         print(error) 
         
