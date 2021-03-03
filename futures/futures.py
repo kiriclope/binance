@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
 import math
-import time 
+import time
+from datetime import datetime
 import numpy 
 import click
 from client import *
@@ -85,9 +86,9 @@ def cancel_all():
 @click.option('--test','-t', default=False, is_flag=True) 
 @click.option('--percentage', '-p', default=1, type=float) 
 @click.option('--mark_per', '-m', default=0.001, type=float) 
-@click.option('--stop_per', '-s', default=0.01, type=float) 
-@click.option('--target_per', '-x', default=0.05, type=float) 
-@click.option('--target_qty_per', '-q', default=0.5, type=float) 
+@click.option('--stop_per', '-s', default=0.005, type=float) 
+@click.option('--target_per', '-x', default=0.025, type=float) 
+@click.option('--target_qty_per', '-q', default=1, type=float) 
 @click.option('--leverage', '-l', type=int) 
 
 def make_order(side, position, order_type, symbol, leverage, test, percentage, mark_per, stop_per, target_per, target_qty_per):     
@@ -129,18 +130,18 @@ def make_order(side, position, order_type, symbol, leverage, test, percentage, m
               'leverage:', position_info['leverage']+',',
               'liquidationPrice', position_info['liquidationPrice'])
         leverage = float( position_info['leverage'] )
-            
-    print(symbol, 'mark price:', mark_info['markPrice']+',',
-          'last funding rate:', str(round(float(mark_info['lastFundingRate'])*100,4))+'%,',
-          'countdown', convert( float(mark_info['nextFundingTime'] ) ) )
-    
+        
     exchange_info = client.futures_exchange_info()["symbols"] 
     sym_info = list(filter(lambda dum: dum['symbol'] == symbol, exchange_info))[0] 
     filters = sym_info['filters'] 
     
     tick_size = float( list(filter(lambda dum: dum['filterType'] == 'PRICE_FILTER', filters))[0]['tickSize'] )
     step_size = float( list(filter(lambda dum: dum['filterType'] == 'LOT_SIZE', filters))[0]['stepSize'] )
-    
+        
+    print(symbol, 'mark price:', float_precision(float(mark_info['markPrice']), tick_size) +',',
+          'last funding rate:', str(round(float(mark_info['lastFundingRate'])*100,4))+'%,',
+          'countdown', convert(int(mark_info['nextFundingTime'] )/1000 - time.time() ) )
+        
     # price
     if position=='LONG':
         price = float( float(mark_price) *  (1 - mark_per ) ) 
@@ -209,8 +210,8 @@ def make_order(side, position, order_type, symbol, leverage, test, percentage, m
                         currentPrice = float(client.futures_mark_price(symbol=symbol)['markPrice'])
                         
                         print('stop', stopPrice, 'price', currentPrice, 'target', targetPrice,
-                              'PNL', round( currentPrice-float(entryPrice), 2),
-                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)', end='\r')                         
+                              'PNL', round( (currentPrice-float(entryPrice)) * quantity, 2),
+                              '(', round( (currentPrice/float(entryPrice)-1) * quantity, 2), '%)', end='\r') 
                     
                         if currentPrice>=targetPrice: 
                             stopPrice = float(float_precision(currentPrice*(1-stop_per), tick_size)) 
@@ -218,18 +219,18 @@ def make_order(side, position, order_type, symbol, leverage, test, percentage, m
                             
                     print('') 
                     if currentPrice>=targetPrice : 
-                        print('TAKE_PROFIT, PNL', round( currentPrice-float(entryPrice), 2) ,
-                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)' ) 
+                        print('TAKE_PROFIT, PNL', round( (currentPrice-float(entryPrice)) * quantity, 2) ,
+                              '(', round( (currentPrice/float(entryPrice)-1) * quantity, 2), '%)' ) 
                     else:
-                        print('STOP_MARKET, PNL', round( currentPrice-float(entryPrice), 2) ,
-                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)' ) 
+                        print('STOP_MARKET, PNL', round( (currentPrice-float(entryPrice)) * quantity, 2) ,
+                              '(', round( (currentPrice/float(entryPrice)-1) * quantity, 2), '%)' ) 
                 else:
                     while currentPrice>targetPrice and currentPrice<stopPrice: 
                         currentPrice = float(client.futures_mark_price(symbol=symbol)['markPrice'])
                         
                         print('stop', stopPrice, 'price', currentPrice, 'target', targetPrice,
-                              'PNL', round( currentPrice-float(entryPrice), 2),
-                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)', end='\r')                         
+                              'PNL', round( (currentPrice-float(entryPrice)) * quantity, 2),
+                              '(', round( (currentPrice/float(entryPrice)-1)* quantity, 2), '%)', end='\r')                         
                     
                         if currentPrice<=targetPrice: 
                             stopPrice = float(float_precision(currentPrice*(1-stop_per), tick_size)) 
@@ -237,11 +238,11 @@ def make_order(side, position, order_type, symbol, leverage, test, percentage, m
                             
                     print('') 
                     if currentPrice>=targetPrice : 
-                        print('TAKE_PROFIT, PNL', round( currentPrice-float(entryPrice), 2) ,
-                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)' ) 
+                        print('TAKE_PROFIT, PNL', round( (currentPrice-float(entryPrice))*quantity, 2) ,
+                              '(', round( (currentPrice/float(entryPrice)-1) *quantity, 2), '%)' ) 
                     else:
-                        print('STOP_MARKET, PNL', round( currentPrice-float(entryPrice), 2) ,
-                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)' )                 
+                        print('STOP_MARKET, PNL', round( (currentPrice-float(entryPrice))*quantity, 2) ,
+                              '(', round( (currentPrice/float(entryPrice)-1)*quantity, 2), '%)' )                 
         else:
             
             print('################################################') 
@@ -325,8 +326,8 @@ def make_order(side, position, order_type, symbol, leverage, test, percentage, m
                         currentPrice = float(client.futures_mark_price(symbol=symbol)['markPrice'])
                         
                         print('stop', stopPrice, 'price', currentPrice, 'target', targetPrice,
-                              'PNL', round( currentPrice-float(entryPrice), 2),
-                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)', end='\r')                         
+                              'PNL', round( (currentPrice-float(entryPrice))*quantity, 2),
+                              '(', round( (currentPrice/float(entryPrice)-1)*quantity, 2), '%)', end='\r')                         
                         
                         if currentPrice>=targetPrice: 
                             stopPrice = float(float_precision(currentPrice*(1-stop_per), tick_size)) 
@@ -348,9 +349,9 @@ def make_order(side, position, order_type, symbol, leverage, test, percentage, m
                         currentPrice = float(client.futures_mark_price(symbol=symbol)['markPrice'])
                         
                         print('stop', stopPrice, 'price', currentPrice, 'target', targetPrice,
-                              'PNL', round( currentPrice-float(entryPrice), 2),
-                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)', end='\r')                         
-                    
+                              'PNL', round( (currentPrice-float(entryPrice))*quantity, 2),
+                              '(', round( (currentPrice/float(entryPrice)-1)*quantity, 2), '%)', end='\r')                         
+                        
                         if currentPrice<=targetPrice: 
                             stopPrice = float(float_precision(currentPrice*(1-stop_per), tick_size)) 
                             targetPrice = float(float_precision(currentPrice*(1+target_per), tick_size)) 
@@ -362,11 +363,11 @@ def make_order(side, position, order_type, symbol, leverage, test, percentage, m
                                                 type='MARKET', quantity=quantity)                 
                                         
                     if currentPrice<=targetPrice : 
-                        print('TAKE_PROFIT, PNL', round( currentPrice-float(entryPrice), 2) ,
-                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)' ) 
+                        print('TAKE_PROFIT, PNL', round( (currentPrice-float(entryPrice))*quantity, 2) ,
+                              '(', round( (currentPrice/float(entryPrice)-1)*quantity, 2), '%)' ) 
                     else:
                         print('STOP_MARKET, PNL', round( currentPrice-float(entryPrice), 2) ,
-                              '(', round( (currentPrice/float(entryPrice)-1)*100, 2), '%)' ) 
+                              '(', round( (currentPrice/float(entryPrice)-1)*quantity, 2), '%)' ) 
                     
     except BinanceAPIException as error: 
         print(error) 
